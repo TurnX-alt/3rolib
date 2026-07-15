@@ -619,14 +619,7 @@ mod native_windows_com {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
-    use tokio::sync::oneshot;
-    use webview2_com::GetCookiesCompletedHandler;
-    use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2, ICoreWebView2_2, ICoreWebView2Cookie, ICoreWebView2CookieList,
-        ICoreWebView2CookieManager,
-    };
-    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller;
-    use windows_core::Interface;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2Cookie, ICoreWebView2CookieList};
 
     /// Render an `ICoreWebView2CookieList` to the `name=value; ...` string
     /// format that PixivClient / EhentaiClient expect.
@@ -689,7 +682,6 @@ use {
 
 pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
     use adapter::ALL_ADAPTERS;
-    use adapter::ServiceAdapter;
 
     // Iterate every registered adapter; first match wins. The order is
     // significant only when the same cookie string satisfies multiple
@@ -811,6 +803,19 @@ pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<Strin
                 });
                 match rx.await {
                     Ok(s) if !s.trim().is_empty() => {
+                        // Validate via the adapter's has_session contract.
+                        let valid = ALL_ADAPTERS
+                            .iter()
+                            .find(|a| a.window_label == label)
+                            .is_some_and(|a| a.has_session(&s));
+                        if !valid {
+                            tracing::warn!(
+                                target: "erolib::cookies",
+                                service = label,
+                                "captured cookie failed has_session validation"
+                            );
+                            return None;
+                        }
                         tracing::info!(
                             target: "erolib::cookies",
                             service = label,
@@ -877,10 +882,10 @@ fn get_wkwebview_ptr(window: &tauri::WebviewWindow) -> Option<*mut std::ffi::c_v
     // Raw pointers aren't `Send`; pass the address through as a `usize`.
     let (tx, rx) = std::sync::mpsc::channel::<Option<usize>>();
     window
-        .with_webview(move |webview| {
+        .with_webview(move |_webview| {
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             {
-                let ptr = webview.inner();
+                let ptr = _webview.inner();
                 let addr = ptr as usize;
                 let _ = tx.send(Some(addr));
             }

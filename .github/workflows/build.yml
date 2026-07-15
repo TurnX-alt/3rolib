@@ -20,6 +20,15 @@ jobs:
           - os: windows-latest # x86_64 runner
             target: x86_64-pc-windows-msvc
             label: windows-amd64
+
+      # windows-latest (2022) ships Visual Studio 2022 Build Tools preinstalled
+      # at C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools. The
+      # `microsoft/setup-msbuild@v2` action makes them discoverable by cargo.
+      - name: Setup MSVC (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: 17.0
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -37,6 +46,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Setup MSVC (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: 17.0
 
       - name: Rust build cache
         uses: Swatinem/rust-cache@v2

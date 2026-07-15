@@ -52,16 +52,7 @@ pub const EHENTAI: ServiceAdapter = ServiceAdapter {
     session_file: "ehentai_session.json",
 };
 
-pub fn adapters() -> [&'static ServiceAdapter; 2] {
-    [&PIXIV, &EHENTAI]
-}
 
-pub fn has_session_for(service: Service, cookie: &str) -> bool {
-    match service {
-        Service::Pixiv => super::has_pixiv_session(cookie),
-        Service::Ehentai => super::has_ehentai_session(cookie),
-    }
-}
 
 impl ServiceAdapter {
     /// Default predicate: accept iff host is in post_login_hosts AND path is
@@ -88,9 +79,7 @@ impl ServiceAdapter {
     }
 
     /// Login URL — the page the in-app browser opens first.
-    pub fn login_url(&self) -> &'static str {
-        self.login_url
-    }
+    /// (Use the public `login_url` field directly.)
 
     /// Cookie host suffixes — used by the SQLite fallback reader to filter
     /// which cookies belong to this service.
@@ -102,11 +91,6 @@ impl ServiceAdapter {
     /// captures once the webview lands on one of these.
     pub fn post_login_hosts(&self) -> &'static [&'static str] {
         self.post_login_hosts
-    }
-
-    /// File name (under `app_local_data_dir`) where the session persists.
-    pub fn session_file(&self) -> &'static str {
-        self.session_file
     }
 
     /// Cookie string predicate: does this string look like a logged-in
