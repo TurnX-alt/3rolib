@@ -1,0 +1,13 @@
+fix(deps): re-pin windows-core 0.61 and lock windows-future resolution
+
+The cargo update bumped windows-core 0.61.2 → 0.62.2 transitively, but
+my code uses windows_core::PWSTR / PCWSTR / Result / Interface from 0.61.
+Re-pinning to 0.61 keeps both the source compile and the lockfile
+aligned. CI Windows amd64 (msvc) build green with this.
+
+* src-tauri/Cargo.lock: re-lock windows-core at 0.61.2 + windows-future
+  at 0.2.1 (was getting add-only conflicts on macos-14+aarch64 where
+  tauri-wry / webview2-com pull both versions)
+* src-tauri/Cargo.toml: keep windows-core = "0.61" direct dep so the
+  pwstr / result types in commands/cookies.rs resolve to the 0.61
+  namespace, not the 0.62 one

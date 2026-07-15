@@ -26,9 +26,10 @@ reqwest = { version = "0.11", features = ["json"] }
 # thread; non-blocking on the WebView2 main thread). Same versions as the
 # transitive deps already in Cargo.lock.
 webview2-com = "0.38"
-# windows-core exposes the `interface()` method and HRESULT/PWSTR types used by
-# the webview2-com COM bindings. Pulled transitively by tauri-wry; promote to
-# direct so the cookie capture module can name its types.
+# windows-core exposes the `PWSTR` / `PCWSTR` / `Result` / `Interface`
+# types used by the cookie capture module. Pinned to 0.61 to match the
+# version that the rest of the project (tauri-wry / wry / windows-rs)
+# already depends on.
 windows-core = "0.61"
 # url::Url — used by cookies::adapter::SessionAdapter::is_post_login.
 url = "2"
