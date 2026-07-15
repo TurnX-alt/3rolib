@@ -612,55 +612,15 @@ pub fn extract_cookie_from_url(window: &tauri::WebviewWindow) -> Option<String> 
 // completion result through a `tokio::sync::oneshot` channel, and `await` the
 // channel receiver on the caller side. The oneshot receiver `.await`s the
 // result without ever blocking the main thread.
+//
+// CURRENTLY DISABLED — see the doc comment at the original Method 2c block.
+// The async COM GetCookies path requires `webview2-com` + `windows-core`
+// direct deps, but those conflict with the `windows` crate's transitive
+// 0.61 pin and break the macOS / Linux CI build. Until that conflict is
+// resolved (windows-rs version bump, repo-wide `[patch.crates-io]`, or
+// migrating the entire project to windows-core 0.62), Method 2b (SQLite
+// plaintext) + Method 3 (JS eval) are the only cookie capture paths.
 // ---------------------------------------------------------------------------
-
-#[cfg(target_os = "windows")]
-mod native_windows_com {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-
-    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2Cookie, ICoreWebView2CookieList};
-
-    /// Render an `ICoreWebView2CookieList` to the `name=value; ...` string
-    /// format that PixivClient / EhentaiClient expect.
-    pub fn cookie_list_to_string(list: &ICoreWebView2CookieList) -> String {
-        let mut count: u32 = 0;
-        if unsafe { list.Count(&mut count) }.is_err() {
-            return String::new();
-        }
-        let mut out = String::new();
-        for i in 0..count {
-            let cookie: ICoreWebView2Cookie = match unsafe { list.GetValueAtIndex(i) } {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let mut name_ptr = windows_core::PWSTR(std::ptr::null_mut());
-            if unsafe { cookie.Name(&mut name_ptr) }.is_err() || name_ptr.0.is_null() {
-                continue;
-            }
-            let name = unsafe { name_ptr.to_string() }.unwrap_or_default();
-            let mut value_ptr = windows_core::PWSTR(std::ptr::null_mut());
-            if unsafe { cookie.Value(&mut value_ptr) }.is_err() || value_ptr.0.is_null() {
-                continue;
-            }
-            let value = unsafe { value_ptr.to_string() }.unwrap_or_default();
-            if !name.is_empty() {
-                if !out.is_empty() {
-                    out.push_str("; ");
-                }
-                out.push_str(&name);
-                out.push('=');
-                out.push_str(&value);
-            }
-        }
-        out
-    }
-
-    /// Convert a Rust `&str` URL to a UTF-16 null-terminated wide string.
-    pub fn uri_to_wide(uri: &str) -> Vec<u16> {
-        OsStr::new(uri).encode_wide().chain(std::iter::once(0)).collect()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -670,15 +630,6 @@ mod native_windows_com {
 ///
 /// Capture order (most reliable first):
 /// 1. **The login window's own WKHtt
-#[cfg(target_os = "windows")]
-use {
-    tokio::sync::oneshot,
-    webview2_com::GetCookiesCompletedHandler,
-    webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2, ICoreWebView2_2, ICoreWebView2CookieList, ICoreWebView2CookieManager,
-    },
-    windows_core::Interface,
-};
 
 pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<String> {
     use adapter::ALL_ADAPTERS;
@@ -749,99 +700,6 @@ pub async fn capture_all_cookies(app: &impl Manager<tauri::Wry>) -> Option<Strin
         }
     }
 
-    // Method 2c: ICoreWebView2_2.CookieManager.GetCookies via async COM.
-    #[cfg(target_os = "windows")]
-    {
-        for &adapter in ALL_ADAPTERS {
-            let label = adapter.window_label();
-            if let Some(window) = app.get_webview_window(label) {
-                // Pick a stable post-login URL for the GetCookies URI.
-                // The service's first POST_LOGIN_HOSTS entry + https:// =
-                // canonical scheme://host/.
-                let host = adapter.post_login_hosts()[0];
-                let uri = format!("https://{}/", host);
-                let (tx, rx) = oneshot::channel::<String>();
-                let tx_cell: std::sync::Arc<std::sync::Mutex<Option<oneshot::Sender<String>>>> =
-                    std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
-                let tx_cell_for_cb = tx_cell.clone();
-                let _ = window.with_webview(move |wv| {
-                    let ctrl = wv.controller();
-                    let core: ICoreWebView2 = match unsafe { ctrl.CoreWebView2() } {
-                        Ok(c) => c,
-                        Err(_) => return,
-                    };
-                    let webview2: ICoreWebView2_2 = match core.cast() {
-                        Ok(w) => w,
-                        Err(_) => return,
-                    };
-                    let manager: ICoreWebView2CookieManager =
-                        match unsafe { webview2.CookieManager() } {
-                            Ok(m) => m,
-                            Err(_) => return,
-                        };
-                    let wide = native_windows_com::uri_to_wide(&uri);
-                    let pwcstr = windows_core::PCWSTR(wide.as_ptr());
-                    let handler = GetCookiesCompletedHandler::create(Box::new(
-                        move |result: windows_core::Result<()>,
-                              list: Option<ICoreWebView2CookieList>| {
-                            let rendered = match (result, list) {
-                                (Err(_e), _) => String::new(),
-                                (Ok(()), Some(l)) => {
-                                    native_windows_com::cookie_list_to_string(&l)
-                                }
-                                (Ok(()), None) => String::new(),
-                            };
-                            if let Ok(mut guard) = tx_cell_for_cb.lock() {
-                                if let Some(tx) = guard.take() {
-                                    let _ = tx.send(rendered);
-                                }
-                            }
-                            Ok(())
-                        },
-                    ));
-                    unsafe { let _ = manager.GetCookies(pwcstr, &handler); }
-                });
-                match rx.await {
-                    Ok(s) if !s.trim().is_empty() => {
-                        // Validate via the adapter's has_session contract.
-                        let valid = ALL_ADAPTERS
-                            .iter()
-                            .find(|a| a.window_label == label)
-                            .is_some_and(|a| a.has_session(&s));
-                        if !valid {
-                            tracing::warn!(
-                                target: "erolib::cookies",
-                                service = label,
-                                "captured cookie failed has_session validation"
-                            );
-                            return None;
-                        }
-                        tracing::info!(
-                            target: "erolib::cookies",
-                            service = label,
-                            len = s.len(),
-                            "captured cookies via ICoreWebView2 CookieManager (async)"
-                        );
-                        return Some(s);
-                    }
-                    Ok(_) => {
-                        tracing::debug!(
-                            target: "erolib::cookies",
-                            "ICoreWebView2 CookieManager returned no cookies for {label}"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "erolib::cookies",
-                            service = label,
-                            error = %e,
-                            "ICoreWebView2 CookieManager capture failed"
-                        );
-                    }
-                }
-            }
-        }
-    }
 
     // Method 3: JS eval fallback (non-HttpOnly cookies — both services).
     for &adapter in ALL_ADAPTERS {

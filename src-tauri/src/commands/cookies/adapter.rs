@@ -97,13 +97,17 @@ impl ServiceAdapter {
     }
 
     /// Hosts that count as "past login". The cookie capture pipeline
-    /// captures once the webview lands on one of these.
+    /// captures once the webview lands on one of these. Use the public
+    /// field `post_login_hosts` directly — this method is provided for
+    /// cases where a `&ServiceAdapter` is what's at hand.
+    #[allow(dead_code)] // ponytail: kept as a stable method-shape for future capture paths.
     pub fn post_login_hosts(&self) -> &'static [&'static str] {
         self.post_login_hosts
     }
 
     /// Cookie string predicate: does this string look like a logged-in
     /// session for this service?
+    #[allow(dead_code)] // ponytail: same — kept for future Method 2c that we disabled.
     pub fn has_session(&self, cookie: &str) -> bool {
         match self.service {
             Service::Pixiv => super::has_pixiv_session(cookie),
