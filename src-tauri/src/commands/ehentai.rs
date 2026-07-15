@@ -168,19 +168,37 @@ pub async fn ehentai_open_login_window(
     app_handle: AppHandle,
     session: State<'_, Arc<EhentaiSession>>,
 ) -> Result<(), String> {
-    let login_url: Url = "https://forums.e-hentai.org/index.php?act=Login"
+    let login_url: Url = crate::commands::cookies::adapter::EHENTAI.login_url
         .parse()
-        .map_err(|e| format!("bad login url: {e}"))?;
+        .map_err(|e| format!("bad ehentai login url: {e}"))?;
 
     let window = tauri::WebviewWindowBuilder::new(
         &app_handle,
-        "ehentai-login",
+        crate::commands::cookies::adapter::EHENTAI.window_label,
         WebviewUrl::External(login_url),
     )
     .title("Login to e-hentai")
     .inner_size(560.0, 760.0)
     .center()
     .resizable(true)
+    // Separate WebView2 user data folder — see
+    // commands::pixiv_login::pixiv_open_login_window for why.
+    .data_directory(
+        app_handle
+            .path()
+            .app_local_data_dir()
+            .map(|d| d.join("EBWebView-login-ehentai"))
+            .unwrap_or_default(),
+    )
+    // WebView2 App-Bound Encryption is enforced by Chromium 124+ regardless
+    // of `--disable-features=AppBoundEncryption` (verified on Edge 151).
+    // eH cookies (ipb_member_id / ipb_pass_hash) are NOT HttpOnly so the
+    // JS-eval fallback (Method 3 in capture_all_cookies) works regardless
+    // of disk encryption — no flag needed. See pixiv_login.rs for the
+    // manual-paste hint context.
+    .additional_browser_args(
+        "--disable-features=msSmartScreenProtection",
+    )
     // Disable spell-check/autocorrect on every input (see pixiv_login.rs) —
     // macOS 26 WKWebView's NSCorrectionPanel crashes the window as a sheet.
     .initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#)
@@ -211,20 +229,15 @@ pub async fn ehentai_open_login_window(
                 Ok(u) => u,
                 Err(_) => continue,
             };
-            let host = url.host_str().unwrap_or("");
-            let on_eh =
-                host == "e-hentai.org" || host.ends_with(".e-hentai.org") || host == "exhentai.org"
-                    || host.ends_with(".exhentai.org");
-            let path = url.path();
-            if !on_eh || path.contains("act=Login") {
+            if !crate::commands::cookies::adapter::EHENTAI.is_post_login(&url) {
                 continue;
             }
 
             // Try native cookie capture from the webview's own data store
             // (captures HttpOnly cookies too, though EHentai's are not HttpOnly).
             let app_clone = app_for_poll.clone();
-            if let Ok(Some(c)) = tauri::async_runtime::spawn_blocking(move || {
-                capture_all_cookies(&app_clone)
+            if let Ok(Some(c)) = tauri::async_runtime::spawn(async move {
+                capture_all_cookies(&app_clone).await
             })
             .await
             {
@@ -254,8 +267,8 @@ pub async fn ehentai_open_login_window(
             }
             tauri::async_runtime::spawn(async move {
                 let app_clone = app.clone();
-                if let Ok(Some(cookie)) = tauri::async_runtime::spawn_blocking(move || {
-                    capture_all_cookies(&app_clone)
+                if let Ok(Some(cookie)) = tauri::async_runtime::spawn(async move {
+                    capture_all_cookies(&app_clone).await
                 })
                 .await
                 {
@@ -272,8 +285,8 @@ pub async fn ehentai_open_login_window(
 }
 
 #[allow(dead_code)]
-fn ehentai_try_capture(app: &AppHandle, session: &EhentaiSession) -> Option<String> {
-    let cookie = capture_all_cookies(app)?;
+async fn ehentai_try_capture(app: &AppHandle, session: &EhentaiSession) -> Option<String> {
+    let cookie = capture_all_cookies(app).await?;
     if !has_ehentai_session(&cookie) {
         return None;
     }
