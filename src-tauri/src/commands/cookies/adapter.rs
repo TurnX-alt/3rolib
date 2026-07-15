@@ -32,6 +32,9 @@ pub struct ServiceAdapter {
     pub post_login_hosts: &'static [&'static str],
     pub cookie_host_suffixes: &'static [&'static str],
     pub session_file: &'static str,
+    pub window_title: &'static str,
+    pub data_directory_name: &'static str,
+    pub additional_browser_args: &'static str,
 }
 
 pub const PIXIV: ServiceAdapter = ServiceAdapter {
@@ -41,6 +44,9 @@ pub const PIXIV: ServiceAdapter = ServiceAdapter {
     post_login_hosts: &["www.pixiv.net", "accounts.pixiv.net"],
     cookie_host_suffixes: &["pixiv.net", "accounts.pixiv.net"],
     session_file: "pixiv_session.json",
+    window_title: "Login to Pixiv",
+    data_directory_name: "EBWebView-login-pixiv",
+    additional_browser_args: "--disable-features=msSmartScreenProtection",
 };
 
 pub const EHENTAI: ServiceAdapter = ServiceAdapter {
@@ -50,6 +56,9 @@ pub const EHENTAI: ServiceAdapter = ServiceAdapter {
     post_login_hosts: &["e-hentai.org", "exhentai.org", "forums.e-hentai.org"],
     cookie_host_suffixes: &["e-hentai.org", "exhentai.org"],
     session_file: "ehentai_session.json",
+    window_title: "Login to e-hentai",
+    data_directory_name: "EBWebView-login-ehentai",
+    additional_browser_args: "--disable-features=msSmartScreenProtection",
 };
 
 
@@ -100,6 +109,34 @@ impl ServiceAdapter {
             Service::Pixiv => super::has_pixiv_session(cookie),
             Service::Ehentai => super::has_ehentai_session(cookie),
         }
+    }
+
+    /// Build the login webview for this service. Centralises the
+    /// `WebviewWindowBuilder` chain (data_directory, additional_browser_args,
+    /// title, size, post-login host predicate) so each service's
+    /// `*_open_login_window` Tauri command is a one-liner.
+    pub fn open_login_window(
+        &self,
+        app: &tauri::AppHandle,
+    ) -> Result<tauri::WebviewWindow, tauri::Error> {
+        use tauri::{Manager, WebviewUrl};
+        let url: tauri::Url = self
+            .login_url
+            .parse()
+            .expect("adapter login_url must be a valid URL");
+        let dir = app
+            .path()
+            .app_local_data_dir()
+            .map(|d| d.join(self.data_directory_name))
+            .unwrap_or_default();
+        tauri::WebviewWindowBuilder::new(app, self.window_label, WebviewUrl::External(url))
+            .title(self.window_title)
+            .inner_size(520.0, 760.0)
+            .center()
+            .resizable(true)
+            .data_directory(dir)
+            .additional_browser_args(self.additional_browser_args)
+            .build()
     }
 }
 

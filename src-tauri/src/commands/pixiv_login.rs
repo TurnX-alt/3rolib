@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::Emitter;
-use tauri::{AppHandle, Manager, State, Url, WebviewUrl, WindowEvent};
+use tauri::{AppHandle, Manager, State, Url, WindowEvent};
 
 use crate::commands::cookies::adapter;
 use crate::commands::cookies::{capture_all_cookies, has_pixiv_session};
@@ -34,61 +34,9 @@ pub async fn pixiv_open_login_window(
     app_handle: AppHandle,
     session: State<'_, Arc<PixivSession>>,
 ) -> Result<(), String> {
-    let login_url: Url = adapter::PIXIV.login_url
-        .parse()
-        .map_err(|e| format!("bad pixiv login url: {e}"))?;
-
-    let window = tauri::WebviewWindowBuilder::new(
-        &app_handle,
-        adapter::PIXIV.window_label,
-        WebviewUrl::External(login_url),
-    )
-    .title("Login to Pixiv")
-    .inner_size(520.0, 760.0)
-    .center()
-    .resizable(true)
-    // Use a separate WebView2 user data folder for the login window so it
-    // doesn't share SQLite locks with the main window's EBWebView folder
-    // (sharing the folder causes `0x8007139F ERROR_INVALID_STATE` the moment
-    // two WebView2 instances try to write to Cookies.sqlite concurrently).
-    // Cookies still end up in the main window's store on next launch
-    // because we read them via the SQLite directly (see
-    // commands::cookies::native_windows) and persist to the session JSON.
-    .data_directory(
-        app_handle
-            .path()
-            .app_local_data_dir()
-            .map(|d| d.join("EBWebView-login-pixiv"))
-            .unwrap_or_default(),
-    )
-    // Disable WebView2 App-Bound Encryption so the cookie SQLite stores
-    // plaintext values (otherwise `value` is empty and `encrypted_value`
-    // holds an App-Bound-encrypted blob that we cannot decrypt in-process
-    // without an elevated Edge handshake). With plaintext in the DB the
-    // native capture path in `commands::cookies::native_windows` reads
-    // HttpOnly PHPSESSID directly. Single combined `--disable-features`
-    // flag — Chromium only honors the last one if multiple are passed,
-    // and conflicts with WebView2's required features surface as
-    // HRESULT 0x8007139F (`ERROR_INVALID_STATE`) at env creation.
-    // WebView2 App-Bound Encryption is enforced by Chromium 124+ regardless
-    // of `--disable-features=AppBoundEncryption` (verified on Edge 151).
-    // The cookie SQLite stores encrypted_value blobs whose plaintext only
-    // leaves the WebView2 process via ICoreWebView2CookieManager.GetCookies
-    // (COM path). Until that path is wired, the user gets a manual-paste
-    // hint when capture fails — see `tests/bdd/MIGRATION.md` and
-    // `PixivDownload.vue` `manualPasteHint`. ponytail: don't ship a flag
-    // that doesn't work.
-    .additional_browser_args(
-        "--disable-features=msSmartScreenProtection",
-    )
-    // Disable spell-check/autocorrect on every input. On macOS 26 WKWebView's
-    // auto-correction panel (NSCorrectionPanel) is shown as a sheet child
-    // window and hits an NSRemoteView assertion → crash the moment the user
-    // types in a field. With spellcheck off WebCore never calls
-    // showCorrectionPanel, sidestepping the bug.
-    .initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#)
-    .build()
-    .map_err(|e| format!("open login window: {e}"))?;
+    let window = adapter::PIXIV
+        .open_login_window(&app_handle)
+        .map_err(|e| format!("open pixiv login window: {e}"))?;
 
     let app_for_poll = app_handle.clone();
     let session_for_poll = session.inner().clone();

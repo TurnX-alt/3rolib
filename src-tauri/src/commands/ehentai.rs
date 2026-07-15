@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State, Url, WebviewUrl, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 use crate::commands::cookies::{capture_all_cookies, has_ehentai_session};
 use crate::services::{
@@ -168,42 +168,9 @@ pub async fn ehentai_open_login_window(
     app_handle: AppHandle,
     session: State<'_, Arc<EhentaiSession>>,
 ) -> Result<(), String> {
-    let login_url: Url = crate::commands::cookies::adapter::EHENTAI.login_url
-        .parse()
-        .map_err(|e| format!("bad ehentai login url: {e}"))?;
-
-    let window = tauri::WebviewWindowBuilder::new(
-        &app_handle,
-        crate::commands::cookies::adapter::EHENTAI.window_label,
-        WebviewUrl::External(login_url),
-    )
-    .title("Login to e-hentai")
-    .inner_size(560.0, 760.0)
-    .center()
-    .resizable(true)
-    // Separate WebView2 user data folder — see
-    // commands::pixiv_login::pixiv_open_login_window for why.
-    .data_directory(
-        app_handle
-            .path()
-            .app_local_data_dir()
-            .map(|d| d.join("EBWebView-login-ehentai"))
-            .unwrap_or_default(),
-    )
-    // WebView2 App-Bound Encryption is enforced by Chromium 124+ regardless
-    // of `--disable-features=AppBoundEncryption` (verified on Edge 151).
-    // eH cookies (ipb_member_id / ipb_pass_hash) are NOT HttpOnly so the
-    // JS-eval fallback (Method 3 in capture_all_cookies) works regardless
-    // of disk encryption — no flag needed. See pixiv_login.rs for the
-    // manual-paste hint context.
-    .additional_browser_args(
-        "--disable-features=msSmartScreenProtection",
-    )
-    // Disable spell-check/autocorrect on every input (see pixiv_login.rs) —
-    // macOS 26 WKWebView's NSCorrectionPanel crashes the window as a sheet.
-    .initialization_script(r#"(function(){function s(){document.querySelectorAll('input,textarea,[contenteditable]').forEach(function(e){e.setAttribute('spellcheck','false');e.setAttribute('autocorrect','off');e.setAttribute('autocomplete','off')})}s();if(document.body){new MutationObserver(s).observe(document.body,{childList:true,subtree:true})}else{document.addEventListener('DOMContentLoaded',s)}})();"#)
-    .build()
-    .map_err(|e| format!("open login window: {e}"))?;
+    let window = crate::commands::cookies::adapter::EHENTAI
+        .open_login_window(&app_handle)
+        .map_err(|e| format!("open ehentai login window: {e}"))?;
 
     let win_label = window.label().to_string();
     let app_for_poll = app_handle.clone();
